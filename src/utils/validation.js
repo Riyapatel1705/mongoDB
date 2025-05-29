@@ -1,6 +1,6 @@
-import { User } from '../models/User.js';
-import nodemailer from "nodemailer";
 import dotenv from "dotenv";
+import nodemailer from "nodemailer";
+import { User } from '../db/models/User.js';
 
 dotenv.config();
 
@@ -70,3 +70,17 @@ export const sendOTPEmail = async (options) => {
     throw error;
   }
 };
+
+export const checkEventExists = async (name) => {
+  try {
+    const event = await Event.findOne({ where: { name } });
+    return event != null;
+  } catch (err) {
+    throw new Error("Error in checking event:", err.message);
+  }
+};
+
+export const isValidDate = (dateStr) => /^\d{4}-\d{2}-\d{2}$/.test(dateStr) && !isNaN(Date.parse(dateStr));
+
+// Escape wildcard characters for LIKE
+export const escapeLike = (str) => str.replace(/[%_]/g, "\\$&");
