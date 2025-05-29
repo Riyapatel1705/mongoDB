@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
 import { User } from '../models/User.js';
 import { validateEmail, validatePassword, validateUsername } from '../utils/validation.js';
-
+import jwt from 'jsonwebtoken';
 export const register = async (req, res) => {
   const { first_name, last_name, email, password, created_by } = req.body;
 
@@ -40,5 +40,33 @@ export const register = async (req, res) => {
   } catch (err) {
     console.error('Error during registration:', err);
     res.status(500).json({ message: 'Failed to register user!' });
+  }
+};
+
+// Login user
+export const login = async (req, res) => {
+  const { email, password } = req.body;
+
+  try {
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(400).json({ message: "User does not exist" });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+
+    if (!isMatch) {
+      return res.status(400).json({ error: 'Invalid email or password' });
+    }
+
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    
+    console.log("Login endpoint hit for user:", user.email);
+
+    res.json({ token });  // send token response once
+
+  } catch (err) {
+    console.error('Error during login:', err);
+    res.status(500).json({ error: 'Database error' });
   }
 };
