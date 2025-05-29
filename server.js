@@ -4,9 +4,10 @@ import path from 'path';
 import { AuthRouter } from './src/routes/AuthRoutes.js';
 import { UserRouter } from './src/routes/UserRoutes.js';
 import {connectDB} from './src/db/index.js';
+import { GoogleAuthRouter } from './src/routes/GoogleAuthRoutes.js';
 const app = express();
 env.config();
-const PORT = 3000;
+const PORT = 7000;
 
 // Middleware
 app.use(express.json()); // Parse incoming JSON requests
@@ -16,6 +17,7 @@ connectDB();
 
 app.use('/',AuthRouter);
 app.use('/',UserRouter);
+app.use('/',GoogleAuthRouter);
 
 console.log("Server file loaded");
 app.use((req, res, next) => {
