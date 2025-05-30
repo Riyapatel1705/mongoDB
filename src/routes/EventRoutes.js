@@ -33,8 +33,8 @@ EventRouter.get("/api/events/closing-soon", getEventsClosingSoon);
 EventRouter.get("/api/events/suggestions", getSuggestedEvents);
 EventRouter.delete("/api/events/past", deletePastEvents);
 EventRouter.post("/api/events/register", Authorization, upload.single("file"), registerUserEvent);
-EventRouter.put("/api/events", Authorization, updateEvent);     // access as ?id=123
-EventRouter.delete("/api/events", Authorization, deleteEvent); // access as ?id=123
+EventRouter.put("/api/events/:id", Authorization, updateEvent);     // access as ?id=123
+EventRouter.delete("/api/events/:id", Authorization, deleteEvent); // access as ?id=123
 EventRouter.post("/api/events/organization", addEventByOrganization);
 
 // Bookmark routes

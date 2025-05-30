@@ -6,6 +6,8 @@ import { Bookmark } from "../db/models/Bookmark.js";
 import { Admin } from "../db/models/Admin.js";
 import { User } from "../db/models/User.js";
 import { Organization } from "../db/models/Organization.js";
+import { Feedback } from "../db/models/Feedback.js";
+import mongoose from 'mongoose';
 import { checkEventExists, isValidDate, escapeLike } from "../utils/validation.js";
 
 env.config();
@@ -78,32 +80,36 @@ export const registerUserEvent = async (req, res) => {
 
 // Update event function
 export const updateEvent = async (req, res) => {
-  const { id } = req.query;
-  if (!id) return res.status(400).json({ message: "No id provided in URL" });
+  const { id } = req.params; // ✅ Correctly access ID from route param
+
+  if (!id) return res.status(400).json({ message: "No ID provided in URL" });
 
   try {
-    const event = await Event.findByPk(id);
+    const event = await Event.findById(id); // ✅ Prefer this over findOne({ _id: id })
     if (!event) return res.status(404).json({ message: "No such event exists!" });
 
-    await event.update(req.body);
+    Object.assign(event, req.body); // ✅ Apply updates
+    await event.save();             // ✅ Save changes to DB
 
     return res.status(200).json({ message: "Event updated successfully!", event });
   } catch (err) {
-    console.error(err);
+    console.error("Error updating event:", err);
     return res.status(500).json({ message: "Error updating event" });
   }
 };
 
+
+
 // Delete event
 export const deleteEvent = async (req, res) => {
-  const { id } = req.query;
+  const { id } = req.params;
   if (!id) return res.status(400).json({ message: "No id provided" });
 
   try {
-    const event = await Event.findByPk(id);
+    const event = await Event.findOne({_id:id});
     if (!event) return res.status(404).json({ message: "No such event exists!" });
 
-    await event.destroy();
+    await event.deleteOne;
 
     return res.status(200).json({ message: "Event deleted successfully" });
   } catch (err) {
@@ -122,36 +128,35 @@ export const getAllEvents = async (req, res) => {
 
     const filters = {};
 
-    if (name) filters.name = { [Op.iLike]: `%${escapeLike(name.trim())}%` };
-    if (category) filters.category = { [Op.iLike]: `%${escapeLike(category.trim())}%` };
+    if (name) filters.name = {$regex:name.trim(),$options:"i" };
+    if (category) filters.category = {$regex:category.trim(),$options:"i"};
     if (start_date && end_date) {
-      filters.start_date = { [Op.between]: [new Date(start_date), new Date(end_date)] };
+      filters.start_date = {$gte:new Date(start_date),$lte:new Date(end_date)};
     } else if (start_date) {
-      filters.start_date = { [Op.gte]: new Date(start_date) };
+      filters.start_date = {$gte:new Date(start_date) };
     } else if (end_date) {
-      filters.start_date = { [Op.lte]: new Date(end_date) };
+      filters.start_date = {$lte:new Date(end_date)};
     }
     if (typeof is_virtual !== "undefined") {
       filters.is_virtual = is_virtual.toLowerCase() === "true";
     }
-    if (city) filters.city = { [Op.iLike]: `%${escapeLike(city.trim())}%` };
-    if (state) filters.state = { [Op.iLike]: `%${escapeLike(state.trim())}%` };
-    if (organization_name) filters.organization_name = { [Op.iLike]: `%${escapeLike(organization_name.trim())}%` };
+    if (city) filters.city = {$regex:city.trim(),$options:"i"};
+    if (state) filters.state = {$regex:state.trim(),$options:"i"};
+    if (organization_name) filters.organization_name = {$regex:organization_name.trim(),$options:"i"};
 
     if (min_price || max_price) {
       filters.price = {};
-      if (!isNaN(min_price)) filters.price[Op.gte] = parseFloat(min_price);
-      if (!isNaN(max_price)) filters.price[Op.lte] = parseFloat(max_price);
+      if(!isNaN(min_price)) filters.price.$gte=parseFloat(min_price);
+      if(!isNaN(max_price)) filters.price.$lte=parseFloat(max_price);
     }
 
-    const offset = (page - 1) * limit;
-
-    const { count: total, rows: events } = await Event.findAndCountAll({
-      where: filters,
-      offset,
-      limit: parseInt(limit),
-      order: [["start_date", "ASC"]],
-    });
+    const skip=(parseInt(page)-1)*parseInt(limit);
+    const total = await Event.countDocuments(filters);
+    
+    const events = await Event.find(filters)
+      .sort({ start_date: 1 })
+      .skip(skip)
+      .limit(parseInt(limit));
 
     if (events.length === 0) {
       return res.status(200).json({
@@ -186,12 +191,15 @@ export const bookmarkEvent = async (req, res) => {
     if (!user_id) return res.status(401).json({ message: "Unauthorized or missing user" });
     if (!event_id) return res.status(400).json({ message: "Valid Event ID is required" });
 
-    const eventExists = await Event.findByPk(event_id);
+    // Check if the event exists
+    const eventExists = await Event.findById(event_id);
     if (!eventExists) return res.status(404).json({ message: "Event does not exist" });
 
-    const existing = await Bookmark.findOne({ where: { user_id, event_id } });
+    // Check if it's already bookmarked
+    const existing = await Bookmark.findOne({ user_id, event_id });
     if (existing) return res.status(200).json({ message: "Already bookmarked" });
 
+    // Create new bookmark
     const bookmark = await Bookmark.create({ user_id, event_id });
 
     res.status(201).json({ message: "Bookmarked successfully", bookmark });
@@ -224,23 +232,23 @@ export const getUpcomingEvents = async (req, res) => {
   try {
     const page = Math.max(parseInt(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit) || 8, 1), 100);
-    const offset = (page - 1) * limit;
+    const skip = (page - 1) * limit;
 
     const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    today.setHours(0, 0, 0, 0); // set time to 00:00:00
 
-    const { count, rows } = await Event.findAndCountAll({
-      where: {
-        start_date: {
-          [Op.gte]: today,
-        },
-      },
-      offset,
-      limit,
-      order: [["start_date", "ASC"]],
+    // Get total count of upcoming events
+    const total = await Event.countDocuments({
+      start_date: { $gte: today },
     });
 
-    if (rows.length === 0) {
+    // Get upcoming event data
+    const events = await Event.find({ start_date: { $gte: today } })
+      .sort({ start_date: 1 }) // ascending order
+      .skip(skip)
+      .limit(limit);
+
+    if (events.length === 0) {
       return res.status(200).json({
         message: "No upcoming events found",
         events: [],
@@ -248,19 +256,20 @@ export const getUpcomingEvents = async (req, res) => {
     }
 
     return res.status(200).json({
-      data: rows,
+      data: events,
       pagination: {
-        total: count,
+        total,
         currentPage: page,
         limit,
-        totalPages: Math.ceil(count / limit),
+        totalPages: Math.ceil(total / limit),
       },
     });
   } catch (error) {
-    console.error(error);
+    console.error("Error in getUpcomingEvents:", error.message);
     return res.status(500).json({ error: "Internal server error" });
   }
 };
+
 
 export const addEventByOrganization = async (req, res) => {
   try {
@@ -337,19 +346,16 @@ export const addFeedback = async (req, res) => {
   }
 
   try {
-    const event=await Event.findOne({
-      where:{
-        id:event_id,
-        start_date:{
-          [Op.lt]:now,
-        },
-      },
-    });
+   const event = await Event.findOne({
+  _id: new mongoose.Types.ObjectId(event_id),
+  start_date: { $lt: new Date() }, // or $lte if you want <=
+   });
     if (!event) {
       return res.status(200).json({ message: "No event found or hasn't started yet" });
     }
 
-    const user = await User.findByPk(user_id);
+    const user = await User.findById( new mongoose.Types.ObjectId(user_id));
+
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -401,97 +407,98 @@ export const deleteBookmarkByUser = async (req, res) => {
   }
 };
 
+
 export const deleteBookmarkEvent = async (req, res) => {
   try {
     const { event_id, user_id } = req.query;
 
     if (!event_id || !user_id) {
-      return res.status(400).json({ message: "Please provide both eventId and userId" });
+      return res.status(400).json({ message: "Please provide both event_id and user_id" });
     }
 
-    const bookmark = await Bookmark.findOne({
-      where: { event_id, user_id },
-    });
+    // Find the bookmark document
+    const bookmark = await Bookmark.findOne({ event_id, user_id });
 
     if (!bookmark) {
       return res.status(200).json({ message: "No such user has bookmarked such event" });
     }
 
-    
-    await bookmark.destroy();
+    // Delete the bookmark
+    await bookmark.deleteOne();
 
-    return res.status(200).json({ message: "Bookmarked event removed !" });
+    return res.status(200).json({ message: "Bookmarked event removed!" });
   } catch (err) {
     console.log("Error in removing bookmarked event:", err.message);
     return res.status(500).json({ message: "Internal server error!" });
   }
 };
 
-export const deleteFeedback=async(req,res)=>{
-  const{user_id,event_id}=req.query;
-  if(!user_id||!event_id){
-    return res.status(400).json({message:"userId and eventId both are required fields"});
+export const deleteFeedback = async (req, res) => {
+  const { user_id, event_id } = req.query;
+
+  if (!user_id || !event_id) {
+    return res.status(400).json({ message: "userId and eventId both are required fields" });
   }
+
   try {
-    const feedback=await Feedback.findOne({where:{user_id,event_id}});
-    if(!feedback){
-      return res.status(200).json({message:"user has not added any feedback on this event"});
+    // Find the feedback document for the user and event
+    const feedback = await Feedback.findOne({ user_id, event_id });
+
+    if (!feedback) {
+      return res.status(200).json({ message: "User has not added any feedback on this event" });
     }
-    await feedback.destroy();
-    return res.status(200).json({message:"Feedback has been removed successfully"});
-  }catch(err){
-    console.log("error in deleting Feedback:",err.message);
-    return res.status(500).json({message:"Internal server error"});
+
+    // Delete the found feedback document
+    await feedback.deleteOne();
+
+    return res.status(200).json({ message: "Feedback has been removed successfully" });
+  } catch (err) {
+    console.log("error in deleting Feedback:", err.message);
+    return res.status(500).json({ message: "Internal server error" });
   }
-}
+};
 
 export const deletePastEvents = async (req, res) => {
   try {
     const { id } = req.query;
 
-    // Check if the user is an admin
-    const admin = await Admin.findOne({ where: { id } });
-    if (!admin) {
-      return res.status(400).json({ message: "You are not authorized to delete events" });
+    if (!id) {
+      return res.status(400).json({ message: "Admin ID is required" });
     }
 
-    // Get today's date
+    // Check if user is admin
+    const admin = await Admin.findById(new mongoose.Types.ObjectId(id));
+    if (!admin) {
+      return res.status(403).json({ message: "You are not authorized to delete events" });
+    }
+
+    // Set today's date to midnight
     const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    console.log("Comparing dates with:", today.toISOString());
 
-    // Find past events (where the start date is less than or equal to today's date)
-    const pastEvents = await Event.findAndCountAll({
-      where: {
-        start_Date: {
-          [Op.lte]: today
-        }
-      }
-    });
-
-    // If there are no past events
-    if (pastEvents.count === 0) {
-      return res.status(400).json({ message: "No past events found" });
+    // Find past events
+    const pastEvents = await Event.find({ start_date: { $lt: today } });  // $lt for strictly less than today
+    if (pastEvents.length === 0) {
+      return res.status(404).json({ message: "No past events found" });
     }
 
     // Delete past events
-    const deletedEvents = await Event.destroy({
-      where: {
-        start_Date: {
-          [Op.lte]: today
-        }
-      }
-    });
-
-    // If there was an error in deleting
-    if (deletedEvents === 0) {
-      return res.status(400).json({ message: "Error in deleting events" });
+    const deleteResult = await Event.deleteMany({ start_date: { $lt: today } });
+    if (deleteResult.deletedCount === 0) {
+      return res.status(500).json({ message: "Error in deleting events" });
     }
 
-    return res.status(200).json({ message: "Past events have been deleted" });
+    return res.status(200).json({
+      message: `${deleteResult.deletedCount} past event(s) have been deleted`,
+    });
 
   } catch (error) {
+    console.error("Error deleting past events:", error.message);
     return res.status(500).json({ message: "Internal server error" });
   }
 };
+
 
 export const getBookmarkedEvents = async (req, res) => {
   try {
@@ -501,27 +508,19 @@ export const getBookmarkedEvents = async (req, res) => {
       return res.status(400).json({ message: "Please provide userId" });
     }
 
-    const bookmarks = await Bookmark.findAll({
-      where: { user_id},
-      include: [
-        {
-          model: Event,
-          required: true,
-          as:"event" // Only return if event exists
-        },
-      ],
-    });
+    // Find all bookmarks for the given user and populate the event data
+    const bookmarks = await Bookmark.find({ user_id }).populate("event_id");
 
     if (bookmarks.length === 0) {
       return res.status(200).json({ message: "No bookmarked events found for this user." });
     }
 
-    // Extract events from bookmarks
-    const bookmarkedEvents = bookmarks.map((bookmark) => bookmark.event);
+    // Extract full event details from populated bookmarks
+    const bookmarkedEvents = bookmarks.map(bookmark => bookmark.event_id);
 
     return res.status(200).json({ bookmarkedEvents });
   } catch (err) {
-    console.log("Error in getting bookmarked events:", err.message);
+    console.error("Error in getting bookmarked events:", err.message);
     return res.status(500).json({ message: "Internal server error" });
   }
 };
@@ -579,48 +578,56 @@ export const getFeedbackOfEvent = async (req, res) => {
   }
 };
 
-export const getFeedbackOfUser=async(req,res)=>{
-  const {user_id}=req.query;
-  if(!user_id){
-    return res.status(400).json({message:"userId is not provided "});
+export const getFeedbackOfUser = async (req, res) => {
+  const { user_id } = req.query;
+
+  if (!user_id) {
+    return res.status(400).json({ message: "user_id is not provided" });
   }
+
   try {
-    const user=await Feedback.findAll({where:{user_id}});
-    if(user.length===0){
-      return res.status(200).json({message:"This user has not added any feedbacks"});
+    // Find all feedbacks where user_id matches
+    const feedbacks = await Feedback.find({ user_id });
+
+    if (feedbacks.length === 0) {
+      return res.status(200).json({ message: "This user has not added any feedbacks" });
     }
-    return res.status(200).json({user});
-  }catch(err){
-    console.log("error in fetching feedbacks:",err.message);
-    return res.status(500).json({message:"Internal server error"});
+
+    return res.status(200).json({ feedbacks });
+  } catch (err) {
+    console.log("error in fetching feedbacks:", err.message);
+    return res.status(500).json({ message: "Internal server error" });
   }
-}
+};
 
-export const getSuggestedEvents=async(req,res)=>{
+
+export const getSuggestedEvents = async (req, res) => {
   try {
-    const {user_id}=req.query;
-    if(!user_id) return res.status(400).json({message:"User ID required"});
+    const { user_id } = req.query;
+    if (!user_id) return res.status(400).json({ message: "User ID required" });
 
-    const bookmarks=await Bookmark.findAll({
-      where:{user_id},
-      include:[{model:Event,as:"event"}]
-    });
-    if(!bookmarks.length)return res.status(200).json({message:"No bookmarks found"});
+    // Get all bookmarks of the user and populate the event data
+    const bookmarks = await Bookmark.find({ user_id }).populate("event_id");
 
-    const categories=bookmarks.map(b=>b.event.category);
-    const bookmarkedEventIds=bookmarks.map(b=>b.event_id);
+    if (!bookmarks.length) {
+      return res.status(200).json({ message: "No bookmarks found" });
+    }
 
-    const suggestedEvents=await Event.findAll({
-      where:{
-        category:categories,
-        id:{[Op.notIn]:bookmarkedEventIds},
-        start_date:{[Op.gte]:new Date()}
-      },
-      order:[['start_date','ASC']]
-    });
-    return res.status(200).json({suggestedEvents});
-  }catch(err){
-    console.log("Error in suggesting events",err.message);
-    return res.status(500).json({message:"Internal server error"})
+    // Extract categories and bookmarked event IDs
+    const categories = bookmarks.map(b => b.event_id.category);
+    const bookmarkedEventIds = bookmarks.map(b => b.event_id._id);
+
+    // Find suggested events based on categories, excluding already bookmarked ones
+    const suggestedEvents = await Event.find({
+      category: { $in: categories },
+      _id: { $nin: bookmarkedEventIds },
+      start_date: { $gte: new Date() }
+    }).sort({ start_date: 1 });
+
+    return res.status(200).json({ suggestedEvents });
+
+  } catch (err) {
+    console.log("Error in suggesting events", err.message);
+    return res.status(500).json({ message: "Internal server error" });
   }
 };
